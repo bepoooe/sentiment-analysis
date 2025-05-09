@@ -433,12 +433,21 @@ def train_engagement_model(df):
             'test_score': test_score
         }
     }, MODEL_PATH)
+      # Calculate feature importance
+    try:
+        feature_importance = pd.DataFrame({
+            'Feature': features,
+            'Importance': model.feature_importances_
+        }).sort_values('Importance', ascending=False)
+    except Exception as e:
+        logger.error(f"Error calculating feature importance: {str(e)}")
+        feature_importance = None
     
-    # Calculate feature importance
-    feature_importance = pd.DataFrame({
-        'Feature': features,
-        'Importance': model.feature_importances_
-    }).sort_values('Importance', ascending=False)
+    if feature_importance is not None and not feature_importance.empty:
+        # Clean up feature names for better display
+        feature_importance['Feature'] = feature_importance['Feature'].apply(
+            lambda x: x.replace('_', ' ').title()
+        )
     
     return model, feature_importance
 
@@ -637,6 +646,9 @@ def create_visualization_plots(df, account_name=None):
     """Create comprehensive visualization plots."""
     if df.empty:
         return "<div class='alert alert-warning'>No data available for visualization</div>"
+    
+    # Handle NaN values
+    df = df.fillna(0)  # Replace NaN with 0 for numeric columns
         
     title_prefix = f"@{account_name} - " if account_name else ""
     
@@ -752,15 +764,25 @@ def create_visualization_plots(df, account_name=None):
             name='Caption Length vs Engagement',
             marker_color='darkorchid'
         )
-        fig.add_trace(length_bar, row=3, col=2)
-    
-    # Update layout for better appearance
+        fig.add_trace(length_bar, row=3, col=2)    # Update layout for better appearance
     fig.update_layout(
         title=f"{title_prefix}Content Analytics Dashboard",
         height=900,
-        width=1000,
+        autosize=True,
         showlegend=False,
-        template='plotly_white'
+        template='plotly_white',
+        margin=dict(l=50, r=50, t=100, b=50),
+        hovermode='closest',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(
+            family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+        ),
+        modebar=dict(
+            bgcolor='rgba(0,0,0,0)',
+            color='#833AB4',
+            activecolor='#FD1D1D'
+        )
     )
     
     # Update y-axis titles
@@ -811,24 +833,38 @@ def create_engagement_heatmap(df):
     # Ensure proper day ordering
     day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     pivot_data = pivot_data.reindex(day_order)
-    
-    # Create heatmap with proper dimensions
+      # Create heatmap with proper dimensions
     fig = px.imshow(
         pivot_data,
         labels=dict(x="Hour of Day (UTC)", y="Day of Week", color="Engagement Score"),
         x=[f"{h:02d}:00" for h in range(24)],
         y=day_order,
         color_continuous_scale="Viridis",
-        title="Engagement Heatmap by Day and Hour"
+        title="Engagement Heatmap by Day and Hour",
+        aspect='auto'
     )
     
-    # Update layout with proper dimensions
+    # Add hover template
+    fig.update_traces(
+        hovertemplate="<b>Day:</b> %{y}<br>" +
+                     "<b>Time:</b> %{x}<br>" +
+                     "<b>Engagement Score:</b> %{z:.2f}<extra></extra>"
+    )
+      # Update layout with proper dimensions
     fig.update_layout(
         height=500,
-        width=900,
+        autosize=True,
         xaxis_title="Hour of Day (UTC)",
         yaxis_title="Day of Week",
-        template='plotly_white'
+        template='plotly_white',
+        margin=dict(l=50, r=50, t=100, b=50),
+        coloraxis_colorbar=dict(
+            title="Engagement Score",
+            thicknessmode="pixels",
+            thickness=20,
+            lenmode="pixels",
+            len=400
+        )
     )
     
     return fig.to_html(full_html=False, include_plotlyjs='cdn')
@@ -852,11 +888,15 @@ def visualize_feature_importance(feature_importance):
         color='Importance',
         color_continuous_scale=px.colors.sequential.Viridis
     )
-    
     fig.update_layout(
         height=500,
-        width=800,
-        template='plotly_white'
+        autosize=True,
+        template='plotly_white',
+        margin=dict(l=150, r=50, t=100, b=50),  # Increased left margin for feature names
+        yaxis=dict(
+            automargin=True,
+            tickfont=dict(size=12)
+        )
     )
     
     return fig.to_html(full_html=False, include_plotlyjs='cdn')
@@ -923,26 +963,53 @@ def analyze():
         
         # Generate insights
         insights = generate_natural_language_insights(processed_df, account_name)
-        
         # Create visualizations with error handling
         try:
-            visualizations = create_visualization_plots(processed_df, account_name)
-        except Exception as viz_error:
-            logger.error(f"Error creating visualizations: {str(viz_error)}")
-            visualizations = "<div class='alert alert-warning'>Error creating visualizations</div>"
-            
-        try:
-            heatmap = create_engagement_heatmap(processed_df)
-        except Exception as heat_error:
-            logger.error(f"Error creating heatmap: {str(heat_error)}")
-            heatmap = "<div class='alert alert-warning'>Error creating heatmap</div>"
-            
-        try:
-            feature_viz = visualize_feature_importance(feature_importance)
-        except Exception as feat_error:
-            logger.error(f"Error creating feature importance visualization: {str(feat_error)}")
-            feature_viz = "<div class='alert alert-warning'>Error creating feature importance visualization</div>"
-        
+            if len(processed_df) < 1:
+                raise ValueError("Not enough data for visualization")
+
+            # Ensure required columns exist
+            required_columns = ['engagement_score', 'hour', 'day_name', 'caption_sentiment', 'avg_comment_sentiment']
+            missing_columns = [col for col in required_columns if col not in processed_df.columns]
+            if missing_columns:
+                raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
+
+            # Debug information
+            logger.info(f"Data shape: {processed_df.shape}")
+            logger.info(f"Columns available: {processed_df.columns.tolist()}")
+
+            # Create visualizations with additional error checking
+            try:
+                visualizations = create_visualization_plots(processed_df, account_name)
+                logger.info("Successfully created main visualizations")
+            except Exception as e:
+                logger.error(f"Error in create_visualization_plots: {str(e)}")
+                visualizations = f"<div class='alert alert-warning'>Error creating visualizations: {str(e)}</div>"
+
+            try:
+                heatmap = create_engagement_heatmap(processed_df)
+                logger.info("Successfully created heatmap")
+            except Exception as e:
+                logger.error(f"Error in create_engagement_heatmap: {str(e)}")
+                heatmap = f"<div class='alert alert-warning'>Error creating heatmap: {str(e)}</div>"
+
+            try:
+                if feature_importance is not None:
+                    feature_viz = visualize_feature_importance(feature_importance)
+                    logger.info("Successfully created feature importance visualization")
+                else:
+                    feature_viz = "<div class='alert alert-info'>Feature importance analysis requires more data points</div>"
+            except Exception as e:
+                logger.error(f"Error in visualize_feature_importance: {str(e)}")
+                feature_viz = f"<div class='alert alert-warning'>Error creating feature importance: {str(e)}</div>"
+
+        except Exception as e:
+            logger.error(f"Error creating visualizations: {str(e)}")
+            error_message = str(e) if str(e) else "Unknown error occurred"
+            visualizations = f"<div class='alert alert-warning'>Error creating visualizations: {error_message}</div>"
+            heatmap = f"<div class='alert alert-warning'>Error creating heatmap: {error_message}</div>"
+            feature_viz = f"<div class='alert alert-warning'>Error creating feature importance: {error_message}</div>"
+
         return jsonify({
             'status': 'success',
             'account_name': account_name,
