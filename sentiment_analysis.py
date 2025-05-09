@@ -175,126 +175,94 @@ def main():
     # Paths to data folders
     instagram_folder = 'instagram_data'
     youtube_folder = 'youtube_data'
+    target_account = 'blu_es_'  # for Instagram
+    target_youtube = 'MrBeast'  # for YouTube
     
-    # Define target accounts
-    instagram_accounts = ['blu_es_', 'nasa']
-    youtube_accounts = ['MrBeast', 'Aakash Gupta']
-    
-    all_results = {
-        'instagram': {},
-        'youtube': {}
-    }
+    insta_results = []
+    youtube_results = []
     
     # Process Instagram data
     insta_data = load_social_media_data(instagram_folder, 'instagram')
-    for account in instagram_accounts:
-        account_results = []
-        for post in insta_data:
-            if 'inputUrl' in post and account in post['inputUrl']:
-                caption_sentiment = analyze_sentiment(post.get('caption', ''))
-                first_comment = post.get('comments', [{}])[0].get('text', '') if post.get('comments', []) else ''
-                first_comment_sentiment = analyze_sentiment(first_comment)
-                engagement_score = analyze_engagement(post)
+    for post in insta_data:
+        if 'inputUrl' in post and target_account in post['inputUrl']:
+            caption_sentiment = analyze_sentiment(post.get('caption', ''))
+            # Get the first comment if available
+            first_comment = post.get('comments', [{}])[0].get('text', '') if post.get('comments', []) else ''
+            first_comment_sentiment = analyze_sentiment(first_comment)
+            engagement_score = analyze_engagement(post)
+            try:
+                timestamp = datetime.strptime(post.get('timestamp', post.get('createdAt', '')), '%Y-%m-%dT%H:%M:%S.000Z')
+            except ValueError:
                 try:
-                    timestamp = datetime.strptime(post.get('timestamp', post.get('createdAt', '')), '%Y-%m-%dT%H:%M:%S.000Z')
-                except ValueError:
-                    try:
-                        timestamp = datetime.now()
-                    except:
-                        timestamp = datetime.now()
-                
-                account_results.append({
-                    'platform': 'instagram',
-                    'account': account,
-                    'post_id': post.get('id', ''),
-                    'timestamp': timestamp,
-                    'caption_sentiment': caption_sentiment,
-                    'first_comment_sentiment': first_comment_sentiment,
-                    'engagement_score': engagement_score,
-                    'type': post.get('type', 'Unknown'),
-                    'firstComment': first_comment
-                })
-        
-        if account_results:
-            all_results['instagram'][account] = pd.DataFrame(account_results)
+                    # Try parsing date from shortcode or use current date as fallback
+                    timestamp = datetime.now()
+                except:
+                    timestamp = datetime.now()
+            
+            insta_results.append({
+                'platform': 'instagram',
+                'account': target_account,
+                'post_id': post.get('id', ''),
+                'timestamp': timestamp,
+                'caption_sentiment': caption_sentiment,
+                'first_comment_sentiment': first_comment_sentiment,
+                'engagement_score': engagement_score,
+                'type': post.get('type', 'Unknown'),
+                'firstComment': first_comment
+            })
     
     # Process YouTube data
     youtube_data = load_social_media_data(youtube_folder, 'youtube')
-    for account in youtube_accounts:
-        account_results = []
-        for post in youtube_data:
-            if 'channel' in post and account in post['channel']:
-                description_sentiment = analyze_sentiment(post.get('description', ''))
-                top_comment = post.get('comments', [{}])[0].get('text', '') if post.get('comments', []) else ''
-                top_comment_sentiment = analyze_sentiment(top_comment)
-                engagement_score = analyze_engagement(post)
-                try:
-                    timestamp = datetime.strptime(post.get('publishedAt', ''), '%Y-%m-%dT%H:%M:%S.000Z')
-                except ValueError:
-                    timestamp = datetime.now()
-                
-                account_results.append({
-                    'platform': 'youtube',
-                    'account': account,
-                    'post_id': post.get('id', ''),
-                    'timestamp': timestamp,
-                    'caption_sentiment': description_sentiment,
-                    'first_comment_sentiment': top_comment_sentiment,
-                    'engagement_score': engagement_score,
-                    'type': 'video',
-                    'firstComment': top_comment
-                })
-        
-        if account_results:
-            all_results['youtube'][account] = pd.DataFrame(account_results)
+    for post in youtube_data:
+        if 'channel' in post and target_youtube in post['channel']:
+            description_sentiment = analyze_sentiment(post.get('description', ''))
+            top_comment = post.get('comments', [{}])[0].get('text', '') if post.get('comments', []) else ''
+            top_comment_sentiment = analyze_sentiment(top_comment)
+            engagement_score = analyze_engagement(post)
+            try:
+                timestamp = datetime.strptime(post.get('publishedAt', ''), '%Y-%m-%dT%H:%M:%S.000Z')
+            except ValueError:
+                timestamp = datetime.now()
+            
+            youtube_results.append({
+                'platform': 'youtube',
+                'account': post.get('channel', ''),
+                'post_id': post.get('id', ''),
+                'timestamp': timestamp,
+                'caption_sentiment': description_sentiment,
+                'first_comment_sentiment': top_comment_sentiment,
+                'engagement_score': engagement_score,
+                'type': 'video',
+                'firstComment': top_comment
+            })
+    
+    # Convert to DataFrames
+    insta_df = pd.DataFrame(insta_results)
+    youtube_df = pd.DataFrame(youtube_results)
+    
+    if len(insta_df) == 0 and len(youtube_df) == 0:
+        print("No data found for the specified accounts")
+        return
     
     print("\n====== Social Media Content Analysis ======")
     
-    # Instagram Insights
-    for account, df in all_results['instagram'].items():
-        print(f"\n📱 Instagram Insights for @{account}")
-        print(generate_platform_insights(df, "instagram"))
+    if len(insta_df) > 0:
+        print("\n📱 Instagram Insights for @" + target_account)
+        print(generate_platform_insights(insta_df, "instagram"))
         
-        # Save individual account results
-        df.to_csv(f'{account}_instagram_analysis.csv', index=False)
+    if len(youtube_df) > 0:
+        print("\n🎥 YouTube Insights for " + target_youtube)
+        print(generate_platform_insights(youtube_df, "youtube"))
     
-    # YouTube Insights
-    for account, df in all_results['youtube'].items():
-        print(f"\n🎥 YouTube Insights for {account}")
-        print(generate_platform_insights(df, "youtube"))
-        
-        # Save individual account results
-        df.to_csv(f'{account}_youtube_analysis.csv', index=False)
+    if len(insta_df) > 0 and len(youtube_df) > 0:
+        print("\n🔍 Cross-Platform Analysis")
+        print(compare_platforms(insta_df, youtube_df))
     
-    # Cross-Platform Analysis
-    if all_results['instagram'] and all_results['youtube']:
-        print("\n🔍 Cross-Platform Performance Analysis")
-        
-        # For each platform, combine all accounts' data
-        insta_combined = pd.concat(all_results['instagram'].values())
-        youtube_combined = pd.concat(all_results['youtube'].values())
-        
-        print("\n📊 Overall Platform Comparison:")
-        print(compare_platforms(insta_combined, youtube_combined))
-        
-        # Compare individual accounts
-        print("\n🎯 Top Performing Accounts:")
-        all_engagement_scores = []
-        
-        for platform, accounts in all_results.items():
-            for account, df in accounts.items():
-                avg_engagement = df['engagement_score'].mean()
-                all_engagement_scores.append({
-                    'platform': platform,
-                    'account': account,
-                    'avg_engagement': avg_engagement
-                })
-        
-        # Sort by engagement score
-        sorted_accounts = sorted(all_engagement_scores, key=lambda x: x['avg_engagement'], reverse=True)
-        
-        for rank, account in enumerate(sorted_accounts, 1):
-            print(f"{rank}. {account['account']} ({account['platform'].title()}): {int(account['avg_engagement'])} engagement points")
+    # Save detailed results
+    if len(insta_df) > 0:
+        insta_df.to_csv(f'{target_account}_instagram_analysis.csv', index=False)
+    if len(youtube_df) > 0:
+        youtube_df.to_csv(f'{target_youtube}_youtube_analysis.csv', index=False)
 
 if __name__ == "__main__":
     main()
