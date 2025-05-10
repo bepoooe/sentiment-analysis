@@ -722,173 +722,202 @@ def create_visualization_plots(df, account_name=None):
         return "<div class='alert alert-warning'>No data available for visualization</div>"
     
     # Handle NaN values
-    df = df.fillna(0)  # Replace NaN with 0 for numeric columns
+    df = df.fillna(0)
     
     title_prefix = f"@{account_name} - " if account_name else ""
     
-    # Create subplots layout - more space for better readability
+    # Create subplots layout with refined spacing
     fig = make_subplots(
-        rows=3, cols=2,
+        rows=4, cols=2,
         subplot_titles=(
-            'Sentiment Distribution (0-100 Scale)', 
+            'Sentiment Distribution', 
             'Comment Types', 
-            'Engagement vs Sentiment (0-100 Scale)', 
-            'Engagement by Hour (0-100 Scale)',
-            'Engagement by Day of Week (0-100 Scale)',
-            'Caption Length vs Engagement (0-100 Scale)'
+            'Engagement vs Sentiment', 
+            'Engagement by Hour',
+            'Engagement by Day', 
+            'Caption Length Distribution',
+            'Content Feature Impact Analysis',
+            None
         ),
         vertical_spacing=0.12,
-        horizontal_spacing=0.08
+        horizontal_spacing=0.10,
+        row_heights=[0.23, 0.23, 0.23, 0.31]  # Give more height to feature importance row
     )
-    
-    # Update axis ranges and labels to reflect 0-100 scale
-    for i in range(1, 4):
-        for j in range(1, 3):
-            fig.update_yaxes(range=[0, 100], row=i, col=j)
-            
-    # Add a note about the scale
-    fig.add_annotation(
-        text="All metrics are shown on a 0-100 scale for easy comparison",
-        xref="paper", yref="paper",
-        x=0, y=1.1,
-        showarrow=False,
-        font=dict(size=12, color="gray"),
-        align="left"
-    )
-    
+
     # 1. Sentiment Distribution
     sentiment_hist = go.Histogram(
-        x=df['avg_comment_sentiment'], 
+        x=df['avg_comment_sentiment'],
         name='Comment Sentiment',
         nbinsx=20,
-        marker_color='skyblue'
+        marker=dict(
+            color='rgba(135, 206, 235, 0.7)',
+            line=dict(color='rgba(135, 206, 235, 1)', width=1)
+        ),
+        hovertemplate='Sentiment Score: %{x:.1f}<br>Count: %{y}<extra></extra>'
     )
     fig.add_trace(sentiment_hist, row=1, col=1)
-    
+
     # 2. Comment Types Distribution
     type_columns = [
-        'emoji_positive_ratio', 'emoji_negative_ratio', 
+        'emoji_positive_ratio', 'emoji_negative_ratio',
         'enthusiastic_ratio', 'critical_ratio', 'question_ratio'
     ]
     
-    # Only use columns that exist in the DataFrame
     available_columns = [col for col in type_columns if col in df.columns]
     
     if available_columns:
-        type_means = df[available_columns].mean() * 100  # Convert to percentages
-        
-        # Format labels for readability
+        type_means = df[available_columns].mean() * 100
         type_labels = [col.replace('_ratio', '').replace('_', ' ').title() for col in type_means.index]
         
         comment_types = go.Bar(
-            x=type_labels, 
+            x=type_labels,
             y=type_means.values,
             name='Comment Types',
-            marker_color='lightgreen'
+            marker=dict(
+                color='rgba(75, 192, 192, 0.7)',
+                line=dict(color='rgba(75, 192, 192, 1)', width=1)
+            ),
+            hovertemplate='Type: %{x}<br>Percentage: %{y:.1f}%<extra></extra>'
         )
         fig.add_trace(comment_types, row=1, col=2)
-    
+
     # 3. Engagement vs Sentiment Scatter
     if 'caption_sentiment' in df.columns and 'avg_comment_sentiment' in df.columns:
         engagement_scatter = go.Scatter(
-            x=df['caption_sentiment'], 
+            x=df['caption_sentiment'],
             y=df['engagement_score'],
             mode='markers',
-            name='Engagement vs Caption Sentiment',
+            name='Engagement vs Sentiment',
             marker=dict(
-                size=10,
+                size=8,
                 color=df['avg_comment_sentiment'],
                 colorscale='RdBu',
-                colorbar=dict(title='Comment Sentiment'),
                 showscale=True,
-                opacity=0.7
+                colorbar=dict(
+                    title=dict(text='Comment Sentiment', font=dict(size=12)),
+                    thickness=15,
+                    len=0.5
                 ),
-            hovertemplate='<b>Caption Sentiment:</b> %{x:.2f}<br>' +
-                         '<b>Engagement Score:</b> %{y:.2f}<br>' +
-                         '<b>Comment Sentiment:</b> %{marker.color:.2f}'
+                opacity=0.7
+            ),
+            hovertemplate='<b>Caption Sentiment:</b> %{x:.1f}<br>' +
+                         '<b>Engagement Score:</b> %{y:.1f}<br>' +
+                         '<b>Comment Sentiment:</b> %{marker.color:.1f}<extra></extra>'
         )
         fig.add_trace(engagement_scatter, row=2, col=1)
-    
+
     # 4. Engagement by Hour
     if 'hour' in df.columns:
         hourly_avg = df.groupby('hour')['engagement_score'].mean().reset_index()
         hour_bar = go.Bar(
-            x=hourly_avg['hour'], 
+            x=hourly_avg['hour'],
             y=hourly_avg['engagement_score'],
-            name='Engagement by Hour',
-            marker_color='coral'
+            name='Hourly Engagement',
+            marker=dict(
+                color='rgba(255, 127, 80, 0.7)',
+                line=dict(color='rgba(255, 127, 80, 1)', width=1)
+            ),
+            hovertemplate='Hour: %{x}:00 UTC<br>Engagement: %{y:.1f}<extra></extra>'
         )
         fig.add_trace(hour_bar, row=2, col=2)
-        fig.update_xaxes(title_text='Hour of Day (UTC)', row=2, col=2)
-    
+
     # 5. Engagement by Day of Week
     if 'day_name' in df.columns:
         day_avg = df.groupby('day_name')['engagement_score'].mean().reset_index()
-        # Sort by day order
         day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         day_avg['day_order'] = day_avg['day_name'].apply(lambda x: day_order.index(x))
         day_avg = day_avg.sort_values('day_order')
         
         day_bar = go.Bar(
-            x=day_avg['day_name'], 
+            x=day_avg['day_name'],
             y=day_avg['engagement_score'],
-            name='Engagement by Day',
-            marker_color='mediumseagreen'
+            name='Daily Engagement',
+            marker=dict(
+                color='rgba(144, 238, 144, 0.7)',
+                line=dict(color='rgba(144, 238, 144, 1)', width=1)
+            ),
+            hovertemplate='Day: %{x}<br>Engagement: %{y:.1f}<extra></extra>'
         )
         fig.add_trace(day_bar, row=3, col=1)
-    
+
     # 6. Caption Length vs Engagement
     if 'caption_length' in df.columns:
-        # Create length buckets for better visualization
         df['caption_length_bucket'] = pd.cut(
-            df['caption_length'], 
+            df['caption_length'],
             bins=[0, 50, 150, 300, float('inf')],
             labels=['Very Short', 'Short', 'Medium', 'Long']
         )
         length_avg = df.groupby('caption_length_bucket')['engagement_score'].mean().reset_index()
         
         length_bar = go.Bar(
-            x=length_avg['caption_length_bucket'], 
+            x=length_avg['caption_length_bucket'],
             y=length_avg['engagement_score'],
-            name='Caption Length vs Engagement',
-            marker_color='darkorchid'
+            name='Caption Length Impact',
+            marker=dict(
+                color='rgba(221, 160, 221, 0.7)',
+                line=dict(color='rgba(221, 160, 221, 1)', width=1)
+            ),
+            hovertemplate='Length: %{x}<br>Engagement: %{y:.1f}<extra></extra>'
         )
-        fig.add_trace(length_bar, row=3, col=2)    # Update layout for better appearance
+        fig.add_trace(length_bar, row=3, col=2)
+
+    # Update common layout settings
     fig.update_layout(
-        title=f"{title_prefix}Content Analytics Dashboard",
-        height=900,
+        title=dict(
+            text=f"{title_prefix}Content Analytics Dashboard",
+            x=0.5,
+            font=dict(size=24)
+        ),
+        height=1200,  # Increased height for better readability
         autosize=True,
         showlegend=False,
         template='plotly_white',
-        margin=dict(l=50, r=50, t=100, b=50),
+        margin=dict(l=50, r=50, t=120, b=80),
         hovermode='closest',
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
         font=dict(
-            family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+            family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            color='#444'
         ),
-        modebar=dict(
-            bgcolor='rgba(0,0,0,0)',
-            color='#833AB4',
-            activecolor='#FD1D1D'
+        hoverlabel=dict(
+            bgcolor="white",
+            font_size=12,
+            font_family="Roboto"
         )
     )
+
+    # Update all subplot axis titles and styling
+    axis_title_font = dict(size=12, color='#666')
     
-    # Update y-axis titles
-    fig.update_yaxes(title_text='Frequency', row=1, col=1)
-    fig.update_yaxes(title_text='Percentage (%)', row=1, col=2)
-    fig.update_yaxes(title_text='Engagement Score', row=2, col=1)
-    fig.update_yaxes(title_text='Engagement Score', row=2, col=2)
-    fig.update_yaxes(title_text='Engagement Score', row=3, col=1)
-    fig.update_yaxes(title_text='Engagement Score', row=3, col=2)
+    # Update y-axis titles with consistent styling
+    fig.update_yaxes(title_text='Count', title_font=axis_title_font, row=1, col=1)
+    fig.update_yaxes(title_text='Percentage (%)', title_font=axis_title_font, row=1, col=2)
+    fig.update_yaxes(title_text='Engagement Score', title_font=axis_title_font, row=2, col=1)
+    fig.update_yaxes(title_text='Engagement Score', title_font=axis_title_font, row=2, col=2)
+    fig.update_yaxes(title_text='Engagement Score', title_font=axis_title_font, row=3, col=1)
+    fig.update_yaxes(title_text='Engagement Score', title_font=axis_title_font, row=3, col=2)
     
-    # Update x-axis titles
-    fig.update_xaxes(title_text='Comment Sentiment', row=1, col=1)
-    fig.update_xaxes(title_text='Comment Type', row=1, col=2)
-    fig.update_xaxes(title_text='Caption Sentiment', row=2, col=1)
-    fig.update_xaxes(title_text='Day of Week', row=3, col=1)
-    fig.update_xaxes(title_text='Caption Length', row=3, col=2)
+    # Update x-axis titles with consistent styling
+    fig.update_xaxes(title_text='Sentiment Score', title_font=axis_title_font, row=1, col=1)
+    fig.update_xaxes(title_text='Comment Type', title_font=axis_title_font, row=1, col=2)
+    fig.update_xaxes(title_text='Caption Sentiment', title_font=axis_title_font, row=2, col=1)
+    fig.update_xaxes(title_text='Hour of Day (UTC)', title_font=axis_title_font, row=2, col=2)
+    fig.update_xaxes(title_text='Day of Week', title_font=axis_title_font, row=3, col=1)
+    fig.update_xaxes(title_text='Caption Length', title_font=axis_title_font, row=3, col=2)
     
+    # Add explanatory annotations
+    fig.add_annotation(
+        text='Hover over the charts for detailed information',
+        xref='paper',
+        yref='paper',
+        x=0.5,
+        y=1.1,
+        showarrow=False,
+        font=dict(size=12, color='gray'),
+        align='center'
+    )
+
     return fig.to_html(full_html=False, include_plotlyjs='cdn')
 
 def create_engagement_heatmap(df):
