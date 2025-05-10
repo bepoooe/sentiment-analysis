@@ -275,6 +275,11 @@ def process_instagram_data(data):
                     comment_sentiments.append(sentiment)
                     comment_types.append(comment_type)
             
+            # Debug logging for comment_sentiments
+            logger.debug(f"Comment sentiments: {comment_sentiments}")
+            logger.debug(f"Type of comment_sentiments: {type(comment_sentiments)}")
+            logger.debug(f"First few comment_sentiments: {comment_sentiments[:5] if len(comment_sentiments) > 5 else comment_sentiments}")
+            
             # Calculate comment sentiment stats safely
             avg_comment_sentiment = (
                 sum(comment_sentiments) / len(comment_sentiments) 
@@ -830,6 +835,10 @@ def create_engagement_heatmap(df):
         fill_value=0
     )
     
+    # Debug logging for pivot_data
+    logger.debug(f"Pivot data for heatmap: {pivot_data}")
+    logger.debug(f"Type of pivot_data: {type(pivot_data)}")
+    
     # Ensure proper day ordering
     day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     pivot_data = pivot_data.reindex(day_order)
@@ -873,6 +882,10 @@ def visualize_feature_importance(feature_importance):
     """Create a horizontal bar chart of feature importance."""
     if feature_importance is None or feature_importance.empty:
         return "<div class='alert alert-warning'>No feature importance data available</div>"
+    
+    # Debug logging for feature_importance
+    logger.debug(f"Feature importance data: {feature_importance}")
+    logger.debug(f"Type of feature_importance: {type(feature_importance)}")
     
     # Get top features
     top_features = feature_importance.sort_values('Importance', ascending=True).tail(10)
@@ -938,19 +951,18 @@ def analyze():
         })
     
     try:
-        # Extract account name from path
+        # Extract account name and load data
         account_name = os.path.basename(os.path.dirname(selected_file)).split('_')[0]
         if account_name == 'blu':
             account_name = 'blu_es'
         
-        # Load and process data
         raw_data = load_social_media_data(selected_file=selected_file)
         if not raw_data:
             return jsonify({
                 'status': 'error',
                 'message': 'Failed to load data from file'
             })
-            
+        
         processed_df = process_instagram_data(raw_data)
         if processed_df.empty:
             return jsonify({
@@ -963,62 +975,131 @@ def analyze():
         
         # Generate insights
         insights = generate_natural_language_insights(processed_df, account_name)
-        # Create visualizations with error handling
-        try:
-            if len(processed_df) < 1:
-                raise ValueError("Not enough data for visualization")
+        
+        # Prepare sentiment analysis data
+        avg_caption_sentiment = processed_df['caption_sentiment'].mean()
+        avg_comment_sentiment = processed_df['avg_comment_sentiment'].mean()
+        
+        def get_sentiment_class(score):
+            if score >= 0.5:
+                return ('Very Positive', 'text-success')
+            elif score >= 0.1:
+                return ('Positive', 'text-success')
+            elif score >= -0.1:
+                return ('Neutral', 'text-muted')
+            elif score >= -0.5:
+                return ('Negative', 'text-danger')
+            else:
+                return ('Very Negative', 'text-danger')
+        
+        content_tone, content_class = get_sentiment_class(avg_caption_sentiment)
+        audience_tone, audience_class = get_sentiment_class(avg_comment_sentiment)
+        
+        sentiment_data = {
+            'content_summary': f"""
+                <p class="mb-2">Overall Tone: <span class="{content_class} fw-bold">{content_tone}</span></p>
+                <p class="mb-0">Your content generally maintains a {content_tone.lower()} tone 
+                with a sentiment score of {avg_caption_sentiment:.2f}</p>
+            """,
+            'audience_summary': f"""
+                <p class="mb-2">Overall Response: <span class="{audience_class} fw-bold">{audience_tone}</span></p>
+                <p class="mb-0">Your audience typically responds with {audience_tone.lower()} comments 
+                with an average sentiment of {avg_comment_sentiment:.2f}</p>
+            """
+        }
 
-            # Ensure required columns exist
-            required_columns = ['engagement_score', 'hour', 'day_name', 'caption_sentiment', 'avg_comment_sentiment']
-            missing_columns = [col for col in required_columns if col not in processed_df.columns]
-            if missing_columns:
-                raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
+        # Prepare engagement visualization data
+        hourly_engagement = processed_df.groupby('hour')['engagement_score'].mean()
+        engagement_data = {
+            'type': 'line',
+            'data': {
+                'labels': [f"{h:02d}:00" for h in range(24)],
+                'datasets': [{
+                    'label': 'Average Engagement Score',
+                    'data': hourly_engagement.reindex(range(24)).fillna(0).tolist(),
+                    'fill': False,
+                    'borderColor': 'rgb(75, 192, 192)',
+                    'tension': 0.1
+                }]
+            },
+            'options': {
+                'responsive': True,
+                'maintainAspectRatio': False,
+                'scales': {
+                    'y': {
+                        'beginAtZero': True,
+                        'title': {
+                            'display': True,
+                            'text': 'Engagement Score'
+                        }
+                    },
+                    'x': {
+                        'title': {
+                            'display': True,
+                            'text': 'Hour of Day (UTC)'
+                        }
+                    }
+                },
+                'plugins': {
+                    'title': {
+                        'display': True,
+                        'text': 'Engagement Throughout the Day'
+                    }
+                }
+            }
+        }
 
-            # Debug information
-            logger.info(f"Data shape: {processed_df.shape}")
-            logger.info(f"Columns available: {processed_df.columns.tolist()}")
+        # Prepare feature importance visualization
+        if feature_importance is not None and not feature_importance.empty:
+            top_features = feature_importance.nlargest(10, 'Importance')
+            feature_viz = {
+                'type': 'bar',
+                'data': {
+                    'labels': top_features['Feature'].tolist(),
+                    'datasets': [{
+                        'label': 'Feature Importance',
+                        'data': top_features['Importance'].tolist(),
+                        'backgroundColor': 'rgba(153, 102, 255, 0.2)',
+                        'borderColor': 'rgba(153, 102, 255, 1)',
+                        'borderWidth': 1
+                    }]
+                },
+                'options': {
+                    'responsive': True,
+                    'maintainAspectRatio': False,
+                    'indexAxis': 'y',
+                    'scales': {
+                        'x': {
+                            'beginAtZero': True,
+                            'title': {
+                                'display': True,
+                                'text': 'Importance Score'
+                            }
+                        }
+                    },
+                    'plugins': {
+                        'title': {
+                            'display': True,
+                            'text': 'Factors Influencing Engagement'
+                        }
+                    }
+                }
+            }
+        else:
+            feature_viz = None
 
-            # Create visualizations with additional error checking
-            try:
-                visualizations = create_visualization_plots(processed_df, account_name)
-                logger.info("Successfully created main visualizations")
-            except Exception as e:
-                logger.error(f"Error in create_visualization_plots: {str(e)}")
-                visualizations = f"<div class='alert alert-warning'>Error creating visualizations: {str(e)}</div>"
-
-            try:
-                heatmap = create_engagement_heatmap(processed_df)
-                logger.info("Successfully created heatmap")
-            except Exception as e:
-                logger.error(f"Error in create_engagement_heatmap: {str(e)}")
-                heatmap = f"<div class='alert alert-warning'>Error creating heatmap: {str(e)}</div>"
-
-            try:
-                if feature_importance is not None:
-                    feature_viz = visualize_feature_importance(feature_importance)
-                    logger.info("Successfully created feature importance visualization")
-                else:
-                    feature_viz = "<div class='alert alert-info'>Feature importance analysis requires more data points</div>"
-            except Exception as e:
-                logger.error(f"Error in visualize_feature_importance: {str(e)}")
-                feature_viz = f"<div class='alert alert-warning'>Error creating feature importance: {str(e)}</div>"
-
-        except Exception as e:
-            logger.error(f"Error creating visualizations: {str(e)}")
-            error_message = str(e) if str(e) else "Unknown error occurred"
-            visualizations = f"<div class='alert alert-warning'>Error creating visualizations: {error_message}</div>"
-            heatmap = f"<div class='alert alert-warning'>Error creating heatmap: {error_message}</div>"
-            feature_viz = f"<div class='alert alert-warning'>Error creating feature importance: {error_message}</div>"
-
-        return jsonify({
+        response_data = {
             'status': 'success',
             'account_name': account_name,
             'post_count': len(processed_df),
             'insights': insights,
-            'visualizations': visualizations,
-            'heatmap': heatmap,
+            'sentiment': sentiment_data,
+            'visualizations': engagement_data,
             'feature_importance': feature_viz
-        })
+        }
+        
+        return jsonify(response_data)
+
     except Exception as e:
         logger.error(f"Error analyzing file {selected_file}: {str(e)}")
         return jsonify({

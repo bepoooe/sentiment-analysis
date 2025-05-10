@@ -5,3 +5,4 @@ flask
 scikit-learn
 joblib
 plotly
+chart.js
