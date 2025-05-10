@@ -1,4 +1,4 @@
-# Social Media Sentiment Analysis Tool
+# Sentiment Analysis Tool
 
 A sophisticated Flask-based web application for analyzing sentiment and engagement patterns in social media content, with a focus on Instagram data analysis.
 
