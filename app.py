@@ -29,8 +29,10 @@ app = Flask(__name__)
 DATA_FOLDER = 'instagram_data'
 MODEL_PATH = 'models/engagement_model.joblib'
 SENTIMENT_THRESHOLDS = {
-    'positive': 0.1,
-    'negative': -0.1
+    'very_positive': 80,
+    'positive': 60,
+    'neutral': 40,
+    'negative': 20
 }
 COMMENT_EMOJIS = {
     'positive': ['❤️', '😍', '🔥', '👏', '💙', '😊', '👍', '💯', '🙌'],
@@ -187,14 +189,15 @@ def load_social_media_data(folder_path=DATA_FOLDER, platform='instagram', select
 
 @lru_cache(maxsize=1024)
 def analyze_sentiment(text):
-    """Calculate sentiment polarity of text with caching for performance."""
+    """Calculate sentiment polarity of text with caching for performance. Returns value between 0-100."""
     if not text:
-        return 0
+        return 50  # Neutral sentiment
     blob = TextBlob(str(text))
-    return blob.sentiment.polarity
+    # Convert from -1:1 range to 0:100 range
+    return (blob.sentiment.polarity + 1) * 50
 
 def analyze_engagement(post):
-    """Calculate engagement score based on platform-specific metrics."""
+    """Calculate engagement score based on platform-specific metrics. Returns value between 0-100."""
     if not post:
         return 0
         
@@ -205,19 +208,19 @@ def analyze_engagement(post):
         
         if views > 0:
             # Video content - views are important
-            engagement_score = (likes + comments * 2 + views) / 100
+            engagement_score = ((likes + comments * 2 + views) / 1000) * 100
         else:
             # Photo content
-            engagement_score = (likes + comments * 2) / 100
+            engagement_score = ((likes + comments * 2) / 1000) * 100
     else:  # YouTube or other platforms
         likes = post.get('likesCount', post.get('likeCount', 0))
         comments = post.get('commentsCount', post.get('commentCount', 0))
         views = post.get('viewCount', 0)
         
         # Weight engagement differently for other platforms
-        engagement_score = (likes + comments * 2 + views * 0.01) / 100
+        engagement_score = ((likes + comments * 2 + views * 0.01) / 1000) * 100
     
-    return max(0, engagement_score)  # Ensure non-negative
+    return min(100, max(0, engagement_score))  # Ensure score is between 0-100
 
 def categorize_comment_type(text):
     """Categorize comments into different types."""
@@ -346,8 +349,7 @@ def process_instagram_data(data):
     if df.empty:
         logger.warning("Processed data is empty")
         return df
-        
-    # Fill missing values
+          # Fill missing values
     df = df.fillna({
         'caption': '',
         'first_comment': '',
@@ -361,6 +363,53 @@ def process_instagram_data(data):
     day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     df['day_name'] = df['day_of_week'].apply(lambda x: day_names[x])
     
+    # Enhance data with additional features
+    df = enhance_data_processing(df)
+    
+    return df
+
+def enhance_data_processing(df):
+    """Enhance data processing with additional metrics and features."""
+    if df.empty:
+        return df
+        
+    # Add time-based features
+    df['hour_of_day'] = pd.to_datetime(df['timestamp']).dt.hour
+    df['day_of_week'] = pd.to_datetime(df['timestamp']).dt.dayofweek
+    df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+    
+    # Add content-based features
+    df['has_emoji'] = df['caption'].apply(lambda x: any(emoji in x for emoji in COMMENT_EMOJIS['positive'] + COMMENT_EMOJIS['negative']))
+    df['hashtag_count'] = df['caption'].str.count('#')
+    df['mention_count'] = df['caption'].str.count('@')
+    
+    # Calculate engagement rates
+    df['engagement_rate'] = df.apply(
+        lambda row: (row['likes_count'] + row['comments_count']) / 
+        (row['reach'] if 'reach' in df.columns and row['reach'] > 0 else 1000), 
+        axis=1
+    )
+    
+    # Add sentiment intensity
+    df['sentiment_intensity'] = df['caption_sentiment'].abs()
+    df['comment_sentiment_intensity'] = df['avg_comment_sentiment'].abs()
+    
+    # Calculate content quality metrics
+    df['caption_word_count'] = df['caption'].str.split().str.len()
+    df['avg_comment_length'] = df.apply(
+        lambda row: np.mean([len(str(c.get('text', '')).split()) for c in row.get('comments', [])]) 
+        if row.get('comments') else 0,
+        axis=1
+    )
+    
+    # Add interaction quality metrics
+    df['meaningful_comments'] = df.apply(
+        lambda row: sum(1 for c in row.get('comments', []) 
+                       if len(str(c.get('text', '')).split()) > 3),
+        axis=1
+    )
+    df['meaningful_comment_ratio'] = df['meaningful_comments'] / df['comments_count'].replace(0, 1)
+    
     return df
 
 def train_engagement_model(df):
@@ -368,13 +417,29 @@ def train_engagement_model(df):
     if df.empty or len(df) < 10:
         logger.warning("Not enough data to train model")
         return None, None
-        
-    # Prepare features for model training
+          # Prepare features for model training
     features = [
-        'caption_sentiment', 'caption_length', 'avg_comment_sentiment', 
-        'sentiment_variance', 'emoji_positive_ratio', 'emoji_negative_ratio', 
-        'enthusiastic_ratio', 'critical_ratio', 'question_ratio', 
-        'short_response_ratio', 'general_comment_ratio', 'hour', 'day_of_week'
+        # Content features
+        'caption_sentiment', 'caption_length', 'caption_word_count',
+        'hashtag_count', 'mention_count', 'has_emoji',
+        
+        # Engagement features
+        'avg_comment_sentiment', 'sentiment_variance', 
+        'engagement_rate', 'meaningful_comment_ratio',
+        
+        # Comment type features
+        'emoji_positive_ratio', 'emoji_negative_ratio',
+        'enthusiastic_ratio', 'critical_ratio', 'question_ratio',
+        'short_response_ratio', 'general_comment_ratio',
+        
+        # Time features
+        'hour_of_day', 'day_of_week', 'is_weekend',
+        
+        # Sentiment intensity
+        'sentiment_intensity', 'comment_sentiment_intensity',
+        
+        # Quality metrics
+        'avg_comment_length'
     ]
     
     # Use only features that exist in the DataFrame
@@ -551,20 +616,24 @@ def generate_natural_language_insights(df, account_name=None):
     avg_comment_sentiment = df['avg_comment_sentiment'].mean()
     
     caption_sentiment_text = (
-        "positive" if avg_caption_sentiment > SENTIMENT_THRESHOLDS['positive']
-        else "negative" if avg_caption_sentiment < SENTIMENT_THRESHOLDS['negative']
-        else "neutral"
+        "very positive" if avg_caption_sentiment >= SENTIMENT_THRESHOLDS['very_positive']
+        else "positive" if avg_caption_sentiment >= SENTIMENT_THRESHOLDS['positive']
+        else "neutral" if avg_caption_sentiment >= SENTIMENT_THRESHOLDS['neutral']
+        else "negative" if avg_caption_sentiment >= SENTIMENT_THRESHOLDS['negative']
+        else "very negative"
     )
     
     comment_sentiment_text = (
-        "positive" if avg_comment_sentiment > SENTIMENT_THRESHOLDS['positive']
-        else "negative" if avg_comment_sentiment < SENTIMENT_THRESHOLDS['negative']
-        else "neutral"
+        "very positive" if avg_comment_sentiment >= SENTIMENT_THRESHOLDS['very_positive']
+        else "positive" if avg_comment_sentiment >= SENTIMENT_THRESHOLDS['positive']
+        else "neutral" if avg_comment_sentiment >= SENTIMENT_THRESHOLDS['neutral']
+        else "negative" if avg_comment_sentiment >= SENTIMENT_THRESHOLDS['negative']
+        else "very negative"
     )
     
     insights.append(f"📝 Content Analysis:")
-    insights.append(f"- Your captions tend to be {caption_sentiment_text} (score: {avg_caption_sentiment:.2f})")
-    insights.append(f"- Your audience responds with primarily {comment_sentiment_text} comments (score: {avg_comment_sentiment:.2f})")
+    insights.append(f"- Your captions tend to be {caption_sentiment_text} (score: {avg_caption_sentiment:.1f}/100)")
+    insights.append(f"- Your audience responds with primarily {comment_sentiment_text} comments (score: {avg_comment_sentiment:.1f}/100)")
     
     # Post volume analysis
     post_count = len(df)
@@ -654,22 +723,37 @@ def create_visualization_plots(df, account_name=None):
     
     # Handle NaN values
     df = df.fillna(0)  # Replace NaN with 0 for numeric columns
-        
+    
     title_prefix = f"@{account_name} - " if account_name else ""
     
     # Create subplots layout - more space for better readability
     fig = make_subplots(
         rows=3, cols=2,
         subplot_titles=(
-            'Comment Sentiment Distribution', 
+            'Sentiment Distribution (0-100 Scale)', 
             'Comment Types', 
-            'Engagement vs Sentiment', 
-            'Engagement by Hour',
-            'Engagement by Day of Week',
-            'Caption Length vs Engagement'
+            'Engagement vs Sentiment (0-100 Scale)', 
+            'Engagement by Hour (0-100 Scale)',
+            'Engagement by Day of Week (0-100 Scale)',
+            'Caption Length vs Engagement (0-100 Scale)'
         ),
         vertical_spacing=0.12,
         horizontal_spacing=0.08
+    )
+    
+    # Update axis ranges and labels to reflect 0-100 scale
+    for i in range(1, 4):
+        for j in range(1, 3):
+            fig.update_yaxes(range=[0, 100], row=i, col=j)
+            
+    # Add a note about the scale
+    fig.add_annotation(
+        text="All metrics are shown on a 0-100 scale for easy comparison",
+        xref="paper", yref="paper",
+        x=0, y=1.1,
+        showarrow=False,
+        font=dict(size=12, color="gray"),
+        align="left"
     )
     
     # 1. Sentiment Distribution
@@ -932,6 +1016,25 @@ def process_correlations(df):
             )
     return correlations
 
+def normalize_sentiment_score(score):
+    """Convert sentiment score from -1 to 1 range to 0 to 100 range."""
+    return (score + 1) * 50  # This converts -1 to 1 into 0 to 100
+
+def get_sentiment_class(score):
+    """Get sentiment class based on normalized score (0-100 range)."""
+    normalized_score = normalize_sentiment_score(score)
+    
+    if normalized_score >= 80:
+        return ('Very Positive', 'text-success')
+    elif normalized_score >= 60:
+        return ('Positive', 'text-success')
+    elif normalized_score >= 40:
+        return ('Neutral', 'text-muted')
+    elif normalized_score >= 20:
+        return ('Negative', 'text-danger')
+    else:
+        return ('Very Negative', 'text-danger')
+
 # Flask routes
 @app.route('/')
 def index():
@@ -976,21 +1079,9 @@ def analyze():
         # Generate insights
         insights = generate_natural_language_insights(processed_df, account_name)
         
-        # Prepare sentiment analysis data
+        # Prepare sentiment analysis data with scale information
         avg_caption_sentiment = processed_df['caption_sentiment'].mean()
         avg_comment_sentiment = processed_df['avg_comment_sentiment'].mean()
-        
-        def get_sentiment_class(score):
-            if score >= 0.5:
-                return ('Very Positive', 'text-success')
-            elif score >= 0.1:
-                return ('Positive', 'text-success')
-            elif score >= -0.1:
-                return ('Neutral', 'text-muted')
-            elif score >= -0.5:
-                return ('Negative', 'text-danger')
-            else:
-                return ('Very Negative', 'text-danger')
         
         content_tone, content_class = get_sentiment_class(avg_caption_sentiment)
         audience_tone, audience_class = get_sentiment_class(avg_comment_sentiment)
@@ -999,12 +1090,12 @@ def analyze():
             'content_summary': f"""
                 <p class="mb-2">Overall Tone: <span class="{content_class} fw-bold">{content_tone}</span></p>
                 <p class="mb-0">Your content generally maintains a {content_tone.lower()} tone 
-                with a sentiment score of {avg_caption_sentiment:.2f}</p>
+                with a sentiment score of {avg_caption_sentiment:.1f}/100</p>
             """,
             'audience_summary': f"""
                 <p class="mb-2">Overall Response: <span class="{audience_class} fw-bold">{audience_tone}</span></p>
                 <p class="mb-0">Your audience typically responds with {audience_tone.lower()} comments 
-                with an average sentiment of {avg_comment_sentiment:.2f}</p>
+                with an average sentiment of {avg_comment_sentiment:.1f}/100</p>
             """
         }
 
